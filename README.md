@@ -144,5 +144,3 @@ Unless otherwise noted in individual files, the contents of this repository are 
 By contributing to this project, you agree that your contributions will be licensed under CC BY 4.0 as well.
 
 For the full legal text of the license, please refer to the official Creative Commons site for **CC BY 4.0**.
-
-# core-ddr2
