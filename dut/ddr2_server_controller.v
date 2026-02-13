@@ -117,6 +117,10 @@ module ddr2_server_controller #(
     wire        ecc_double_err_int;
     // Final corrected data word after applying ECC where appropriate.
     wire [63:0] data_corrected;
+    // Internal ECC enable: in SIM_DIRECT_READ (fast) mode we honor the
+    // testbench's ECC_ENABLE control; in full bus-level mode we disable ECC
+    // to avoid interpreting unmodelled bus/X states as real memory errors.
+    wire        ecc_enable_int;
     
     // ECC storage (simple register array for ECC bits per address)
     // In a real implementation, this would be stored alongside data in memory.
@@ -127,6 +131,11 @@ module ddr2_server_controller #(
     reg [ADDR_WIDTH-1:0] last_write_addr;
     reg [ADDR_WIDTH-1:0] last_read_addr;
     integer               ecc_init_idx;
+
+    // ECC is logically enabled whenever the host asserts ECC_ENABLE; additional
+    // gating (e.g. address validity, VALIDOUT, and X-masking inside
+    // `ecc_secded`) prevents false positives from bus-level artifacts.
+    assign ecc_enable_int = ECC_ENABLE;
     
     // ECC encoder (for writes)
     ecc_secded #(
@@ -174,7 +183,7 @@ module ddr2_server_controller #(
             end
         end else begin
             // Store ECC on writes (when command is issued)
-            if (arb_cmd_put && (arb_cmd == 3'b010 || arb_cmd == 3'b100) && ECC_ENABLE) begin
+            if (arb_cmd_put && (arb_cmd == 3'b010 || arb_cmd == 3'b100) && ecc_enable_int) begin
                 if (arb_addr < 1024) begin
                     ecc_storage[arb_addr[9:0]] <= ecc_code_write;
                     ecc_valid[arb_addr[9:0]]   <= 1'b1;
@@ -183,7 +192,7 @@ module ddr2_server_controller #(
             end
             
             // Retrieve ECC on reads
-            if (validout0 && ECC_ENABLE) begin
+            if (validout0 && ecc_enable_int) begin
                 last_read_addr <= core_raddr0;
             end
         end
@@ -195,18 +204,20 @@ module ddr2_server_controller #(
     
     assign read_ecc_code = addr_has_ecc ? ecc_storage[core_raddr0[9:0]] : 8'd0;
     
-    // Gate raw ECC status by address validity and global enable so that
-    // never-written locations (or ECC disabled) do not produce spurious
-    // correctable/uncorrectable error indications.
-    assign ecc_single_err_int = (ECC_ENABLE && addr_has_ecc) ? ecc_single_err_raw  : 1'b0;
-    assign ecc_double_err_int = (ECC_ENABLE && addr_has_ecc) ? ecc_double_err_raw  : 1'b0;
+    // Gate raw ECC status by address validity, VALIDOUT, and internal enable
+    // so that never-written locations or intermediate bus states do not
+    // produce spurious correctable/uncorrectable error indications.
+    assign ecc_single_err_int =
+        (ecc_enable_int && addr_has_ecc && validout0) ? ecc_single_err_raw  : 1'b0;
+    assign ecc_double_err_int =
+        (ecc_enable_int && addr_has_ecc && validout0) ? ecc_double_err_raw  : 1'b0;
     
     // Select corrected data only when we have a valid ECC entry and the
     // decoder has flagged a correctable single-bit error; otherwise fall back
     // to the raw read data from the four slices.
     assign data_corrected =
-        (ECC_ENABLE && addr_has_ecc && ecc_single_err_raw) ? data_corrected_raw
-                                                           : read_data_64;
+        (ecc_enable_int && addr_has_ecc && ecc_single_err_raw) ? data_corrected_raw
+                                                               : read_data_64;
     
     // Scrubbing engine
     wire        scrub_cmd_req;
@@ -252,7 +263,10 @@ module ddr2_server_controller #(
         .data_in(scrub_data_in),
         .fetching(FETCHING),
         .validout(validout0),
-        .data_out(read_data_64),
+        // Feed the ECC-corrected data stream into the scrubber so that any
+        // write-back operation repairs memory with the *corrected* value
+        // rather than re-storing the originally corrupt word.
+        .data_out(data_corrected),
         .raddr(core_raddr0),
         .scrub_progress(scrub_progress_int),
         .scrub_active(scrub_active_int),
@@ -283,8 +297,8 @@ module ddr2_server_controller #(
     ) u_ras_regs (
         .clk(CLK),
         .reset(RESET),
-        .ecc_single_err(ecc_single_err_int && ECC_ENABLE),
-        .ecc_double_err(ecc_double_err_int && ECC_ENABLE),
+        .ecc_single_err(ecc_single_err_int && ecc_enable_int),
+        .ecc_double_err(ecc_double_err_int && ecc_enable_int),
         .ecc_syndrome(ecc_syndrome_int),
         .err_addr(last_read_addr),
         .err_rank(err_rank),

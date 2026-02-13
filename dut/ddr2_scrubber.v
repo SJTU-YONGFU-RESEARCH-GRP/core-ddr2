@@ -201,9 +201,12 @@ module ddr2_scrubber #(
                 
                 ISSUE_WRITE: begin
                     if (notfull && ready && writeback_needed) begin
-                        // Issue block write command with corrected data
-                        cmd <= 3'b100;  // BLW
-                        sz <= 2'b00;     // 8 words (but we only write one corrected word)
+                        // Issue a scalar write for the corrected word. Using SCW
+                        // here more accurately reflects the single-word repair
+                        // behavior instead of a block write that would imply
+                        // multiple beats of valid write data.
+                        cmd <= 3'b010;  // SCW
+                        sz <= 2'b00;    // Unused for scalar writes
                         addr <= scrub_addr;
                         cmd_put <= 1'b1;
                         data_in <= corrected_data;

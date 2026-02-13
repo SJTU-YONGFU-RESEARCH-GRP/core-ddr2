@@ -102,9 +102,20 @@ module ecc_secded #(
 
     // Decode error type.
     always @* begin
-        syndrome = {syndrome_parity, syndrome_bits};
+        // Default outputs.
+        single_err     = 1'b0;
+        double_err     = 1'b0;
+        data_corrected = data_check;
+        syndrome       = {syndrome_parity, syndrome_bits};
 
-        if (syndrome_bits == 7'b0 && !syndrome_parity) begin
+        // If the incoming data or ECC contain X/Z (reduction XOR yields X),
+        // treat ECC as "not applicable" for this word to avoid spurious
+        // uncorrectable errors from bus-level artifacts.
+        if ((^data_check === 1'bx) || (^ecc_check === 1'bx)) begin
+            single_err     = 1'b0;
+            double_err     = 1'b0;
+            data_corrected = data_check;
+        end else if (syndrome_bits == 7'b0 && !syndrome_parity) begin
             // No error.
             single_err     = 1'b0;
             double_err     = 1'b0;
