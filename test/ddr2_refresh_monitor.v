@@ -71,7 +71,10 @@ module ddr2_refresh_monitor #(
             end else begin
                 // Only track refresh intervals after controller is ready.
                 // Free-running counter between refreshes (saturates at a large value).
-                if (cycles_since_refresh < TREFI_MAX_CLK_EFF * 4)
+                // Pause counting when CKE is low (self-refresh or power-down) since
+                // refreshes don't occur during low-power modes and shouldn't count
+                // toward the refresh interval.
+                if (cke_pad && cycles_since_refresh < TREFI_MAX_CLK_EFF * 4)
                     cycles_since_refresh <= cycles_since_refresh + 1;
 
                 if (is_refresh_cmd) begin

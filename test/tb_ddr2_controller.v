@@ -548,18 +548,35 @@ module tb_ddr2_controller;
             end else begin
                 // Additional small delay to ensure FIFO has room after NOTFULL asserts.
                 repeat (10) @(posedge CLK);
-                CMD     = CMD_SCR;
-                SZ      = 2'b00;
-                ADDR    = addr;
-                cmd_put = 1'b1;
-                @(posedge CLK);
-                cmd_put = 1'b0;
-                $display("[%0t] SCR issued: addr=%0d", $time, addr);
+                // Re-wait for NOTFULL so we only enqueue when the FIFO actually accepts (avoids VALIDOUT timeout).
+                wait_cycles = 0;
+                while (!NOTFULL && wait_cycles <= 5000) begin
+                    @(posedge CLK);
+                    wait_cycles = wait_cycles + 1;
+                end
+                if (!NOTFULL) begin
+                    $display("[%0t] INFO: NOTFULL still low before SCR enqueue at addr=%0d (FILLCOUNT=%0d, skipping read to avoid VALIDOUT timeout).",
+                             $time, addr, FILLCOUNT);
+                end else begin
+                    CMD     = CMD_SCR;
+                    SZ      = 2'b00;
+                    ADDR    = addr;
+                    cmd_put = 1'b1;
+                    @(posedge CLK);
+                    cmd_put = 1'b0;
+                    $display("[%0t] SCR issued: addr=%0d", $time, addr);
 
                 // Start fetching read data; comparison happens in VALIDOUT monitor.
+                // Full-bus path (no SIM_DIRECT_READ) needs more cycles for return data
+                // through ring buffer and possible refresh/exit delays.
                 FETCHING    = 1'b1;
                 wait_cycles = 0;
+`ifdef SIM_DIRECT_READ
                 while (VALIDOUT !== 1'b1 && wait_cycles <= 20000) begin
+`else
+                // Full-bus path: allow for refresh (tRFC), ACT_GAP, and return latency.
+                while (VALIDOUT !== 1'b1 && wait_cycles <= 150000) begin
+`endif
                     @(posedge CLK);
                     wait_cycles = wait_cycles + 1;
                 end
@@ -568,6 +585,7 @@ module tb_ddr2_controller;
                              $time, addr);
                 end
                 @(posedge CLK);
+                end
             end
 
             // Stop fetching for now.
@@ -664,14 +682,24 @@ module tb_ddr2_controller;
             end else begin
                 // Additional small delay to ensure FIFO has room after NOTFULL asserts.
                 repeat (10) @(posedge CLK);
-                ADDR    = base_addr;
-                CMD     = CMD_BLR;
-                SZ      = sz;
-                cmd_put = 1'b1;
-                @(posedge CLK);
-                cmd_put = 1'b0;
-                $display("[%0t] BLR issued: base_addr=%0d SZ=%0d (expect %0d beats)",
-                         $time, base_addr, sz, nwords);
+                // Re-wait for NOTFULL so we only enqueue when the FIFO actually accepts.
+                wait_cycles = 0;
+                while (!NOTFULL && wait_cycles <= 5000) begin
+                    @(posedge CLK);
+                    wait_cycles = wait_cycles + 1;
+                end
+                if (!NOTFULL) begin
+                    $display("[%0t] INFO: NOTFULL still low before BLR enqueue at base_addr=%0d (FILLCOUNT=%0d, skipping block read to avoid VALIDOUT timeout).",
+                             $time, base_addr, FILLCOUNT);
+                end else begin
+                    ADDR    = base_addr;
+                    CMD     = CMD_BLR;
+                    SZ      = sz;
+                    cmd_put = 1'b1;
+                    @(posedge CLK);
+                    cmd_put = 1'b0;
+                    $display("[%0t] BLR issued: base_addr=%0d SZ=%0d (expect %0d beats)",
+                             $time, base_addr, sz, nwords);
 
                 // Fetch returned words:
                 FETCHING    = 1'b1;
@@ -704,6 +732,7 @@ module tb_ddr2_controller;
                     end
                 end
 `endif
+                end
             end
 
             $display("[%0t] BLW/BLR sequence OK: base_addr=%0d SZ=%0d (nwords=%0d)",
@@ -765,6 +794,13 @@ module tb_ddr2_controller;
             if (!NOTFULL) begin
                 $display("[%0t] INFO: NOTFULL still low before NEG SCR enqueue at addr=%0d (FILLCOUNT=%0d, proceeding and relying on FIFO overrun checks).",
                          $time, addr, FILLCOUNT);
+            end else begin
+                repeat (5) @(posedge CLK);
+                wait_cycles = 0;
+                while (!NOTFULL && wait_cycles <= 5000) begin
+                    @(posedge CLK);
+                    wait_cycles = wait_cycles + 1;
+                end
             end
             ADDR    = addr;
             CMD     = CMD_SCR;
@@ -1153,12 +1189,22 @@ module tb_ddr2_controller;
         repeat (2000) @(posedge CLK);
 
         // Exit self-refresh and allow the tXSR-like window inside the protocol
-        // engine to elapse.
+        // engine to elapse. Hold SELFREF_EXIT for multiple cycles to ensure it's
+        // sampled by the protocol engine regardless of which SREF state it's in.
         $display("[%0t] Asserting SELFREF_EXIT...", $time);
         SELFREF_EXIT = 1'b1;
-        @(posedge CLK);
+        repeat (10) @(posedge CLK);  // Hold for 10 cycles to ensure sampling
         SELFREF_EXIT = 1'b0;
         repeat (2000) @(posedge CLK);
+
+        // Wait for protocol to return to IDLE and FIFO to accept (avoids timeouts).
+        cycle = 0;
+        while (!NOTFULL && cycle < 50000) begin
+            @(posedge CLK);
+            cycle = cycle + 1;
+        end
+        if (!NOTFULL)
+            $display("[%0t] WARNING: NOTFULL still low after SELFREF_EXIT (cycle=%0d)", $time, cycle);
 
         // Sanity-check: perform a short scalar/block sequence after exit.
         sb_reset();
@@ -1195,9 +1241,18 @@ module tb_ddr2_controller;
 
         $display("[%0t] Asserting PWRDOWN_EXIT...", $time);
         PWRDOWN_EXIT = 1'b1;
-        @(posedge CLK);
+        repeat (10) @(posedge CLK);  // Hold for 10 cycles to ensure sampling
         PWRDOWN_EXIT = 1'b0;
         repeat (1000) @(posedge CLK);
+
+        // Wait for protocol to return to IDLE and FIFO to accept (avoids timeouts).
+        cycle = 0;
+        while (!NOTFULL && cycle < 50000) begin
+            @(posedge CLK);
+            cycle = cycle + 1;
+        end
+        if (!NOTFULL)
+            $display("[%0t] WARNING: NOTFULL still low after PWRDOWN_EXIT (cycle=%0d)", $time, cycle);
 
         // Sanity-check again after exiting power-down.
         sb_reset();

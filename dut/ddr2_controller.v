@@ -87,7 +87,8 @@ module ddr2_controller #(
     localparam DATA_FIFO_W     = 16;
     localparam DATA_FIFO_D     = 6;
     localparam RETURN_FIFO_W   = ADDR_WIDTH + 16;
-    localparam RETURN_FIFO_D   = 6;
+    // Depth 128 so scalar reads (8 words pushed, 1 popped) don't fill under backpressure.
+    localparam RETURN_FIFO_D   = 7;
 
 `ifdef SIM_DIRECT_READ
     // Host-visible command opcodes (match protocol engine / testbench).
@@ -121,7 +122,7 @@ module ddr2_controller #(
     wire [RETURN_FIFO_W-1:0] return_fifo_out;
     wire [ADDR_WIDTH-1:0] addr_return;
     wire [15:0] ring_dout;
-    wire [6:0]  fillcount_return;
+    wire [RETURN_FIFO_D:0] fillcount_return;
     wire        put_returnFIFO_raw;
     wire        put_returnFIFO;
     wire        fullBar_returnFIFO;

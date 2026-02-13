@@ -83,7 +83,7 @@ module ddr2_protocol_engine #(
     input  wire [15:0]  din_dataFIFO_i,
     input  wire         emptyBar_cmdFIFO_i,
     input  wire         fullBar_returnFIFO_i,
-    input  wire [6:0]   fillcount_returnFIFO_i,
+    input  wire [7:0]   fillcount_returnFIFO_i,
     input  wire [15:0]  ringBuff_dout_i,
     // Runtime DLL control: request to (re)program the DLL mode via a Mode
     // Register Set (MRS) command and enforce a tDLLK-like stabilization
@@ -144,10 +144,14 @@ module ddr2_protocol_engine #(
         3;  // Default: 4 cycles total - 1 cycle for ACTIVATE = 3 wait cycles
 `endif
     // SCREAD delay between issuing a READ and starting to capture return data.
-    // This should be tuned to line up the controller's capture point with the
-    // simple DDR2 memory model's READ_LAT so that the first word pushed into
-    // the return FIFO is already valid.
-    localparam CNT_SCREAD   = 6'd26;
+    // Must be READ_LAT-2 so that we spend READ_LAT-2 cycles in SCREAD and enter
+    // SCREND at cycle READ_LAT-1, when the memory has driven word 0 (simple_mem
+    // drives first word when rd_lat_cnt==2, stable at cycle READ_LAT-1).
+`ifdef READ_LAT_OVERRIDE
+    localparam CNT_SCREAD   = 6'(`READ_LAT_OVERRIDE - 2);
+`else
+    localparam CNT_SCREAD   = 6'd22;  // default READ_LAT 24
+`endif
     localparam CNT_SCWRITE  = 6'd12;   // 2*(AL+CL-1)-2
     localparam CNT_SCWRDATA_SCW = 6'd7;
     localparam CNT_SCWREND  = 6'd17;
@@ -168,60 +172,49 @@ module ddr2_protocol_engine #(
     // implementation simple and self-contained.
     localparam integer ACT_GAP_MIN = 6;
 
-    localparam STATE_BITS = 5;
-    localparam IDLE          = 5'd0,
-               GETCMD        = 5'd1,
-               ACTIVATE      = 5'd2,
-               WAIT_TRCD     = 5'd23,  // Wait for tRCD after ACTIVATE
-               ISSUE_READ    = 5'd3,
-               SCREAD        = 5'd4,
-               SCRLSN        = 5'd5,
-               SCRNLSN       = 5'd6,
-               SCRDNTH       = 5'd7,
-               SCREND        = 5'd8,
-               ISSUE_WRITE   = 5'd9,
-               SCWRITE       = 5'd10,
-               SCWRDATA      = 5'd11,
-               SCWREND       = 5'd12,
-               BLR_ACT       = 5'd13,
-               BLR_ISSUE     = 5'd14,
-               BLR_READ      = 5'd15,
-               BLW_ACT       = 5'd16,
-               BLW_ISSUE     = 5'd17,
-               BLW_WRITE     = 5'd18,
-               RPRE          = 5'd19,
-               RNOP          = 5'd20,
-               RREF          = 5'd21,
-               RIDL          = 5'd22,
-               // Self-refresh entry/exit helper states. These follow the JEDEC
-               // intent at a coarse level:
-               //   - Ensure all banks are precharged (PRE_ALL).
-               //   - Wait tRP-equivalent window.
-               //   - Drop CKE low while issuing NOP on the bus.
-               //   - Remain in self-refresh until an explicit exit request,
-               //     then raise CKE and wait tXSR-equivalent time before
-               //     resuming normal traffic.
-               SREF_PRE      = 5'd24,
-               SREF_TRP      = 5'd25,
-               SREF_ENTER    = 5'd26,
-               SREF_IDLE     = 5'd27,
-               SREF_EXIT_WAIT= 5'd28,
-               // Coarse precharge power-down helper states. Behavior:
-               //   - Ensure all banks are precharged (PRE_ALL).
-               //   - Wait a small tRP-equivalent window.
-               //   - Drop CKE low while issuing NOP on the bus.
-               //   - Remain in power-down until an explicit exit request,
-               //     then raise CKE and wait a conservative tXP/tXPDLL-like
-               //     delay before resuming normal traffic.
-               PD_PRE        = 5'd29,
-               PD_TRP        = 5'd30,
-               PD_IDLE       = 5'd31,
-               PD_EXIT_WAIT  = 5'd24,  // alias IDLE code not used elsewhere
-               DLL_PRE       = 5'd25,
-               DLL_TRP       = 5'd26,
-               DLL_MRS       = 5'd27,
-               DLL_TMRD      = 5'd28,
-               DLL_TDLLK     = 5'd29;
+    // STATE_BITS=6 so SREF/PD/DLL states have unique codes (no duplicate case arms).
+    localparam STATE_BITS = 6;
+    localparam IDLE          = 6'd0,
+               GETCMD        = 6'd1,
+               ACTIVATE      = 6'd2,
+               WAIT_TRCD     = 6'd23,  // Wait for tRCD after ACTIVATE
+               ISSUE_READ    = 6'd3,
+               SCREAD        = 6'd4,
+               SCRLSN        = 6'd5,
+               SCRNLSN       = 6'd6,
+               SCRDNTH       = 6'd7,
+               SCREND        = 6'd8,
+               ISSUE_WRITE   = 6'd9,
+               SCWRITE       = 6'd10,
+               SCWRDATA      = 6'd11,
+               SCWREND       = 6'd12,
+               BLR_ACT       = 6'd13,
+               BLR_ISSUE     = 6'd14,
+               BLR_READ      = 6'd15,
+               BLW_ACT       = 6'd16,
+               BLW_ISSUE     = 6'd17,
+               BLW_WRITE     = 6'd18,
+               RPRE          = 6'd19,
+               RNOP          = 6'd20,
+               RREF          = 6'd21,
+               RIDL          = 6'd22,
+               // Self-refresh entry/exit helper states.
+               SREF_PRE      = 6'd24,
+               SREF_TRP      = 6'd25,
+               SREF_ENTER    = 6'd26,
+               SREF_IDLE     = 6'd27,
+               SREF_EXIT_WAIT= 6'd28,
+               // Precharge power-down helper states.
+               PD_PRE        = 6'd29,
+               PD_TRP        = 6'd30,
+               PD_IDLE       = 6'd31,
+               PD_EXIT_WAIT  = 6'd32,  // was 24: must not share with SREF_PRE
+               // Runtime DLL reconfiguration states (must not share with SREF/PD).
+               DLL_PRE       = 6'd33,
+               DLL_TRP       = 6'd34,
+               DLL_MRS       = 6'd35,
+               DLL_TMRD      = 6'd36,
+               DLL_TDLLK     = 6'd37;
 
     reg [STATE_BITS-1:0] state;
     reg [6:0] cnt;  // Extended to 7 bits to support CNT_RIDL=99 for JEDEC tRFC compliance
@@ -361,8 +354,12 @@ module ddr2_protocol_engine #(
             selfref_active_o <= 1'b0;
             pdown_active_o <= 1'b0;
         end else begin
-            if (state == IDLE && !need_refresh && ready_init_i)
-                refCnt <= refCnt - 12'd1;
+            // Decrement refresh counter continuously when active (not in low-power modes).
+            // This ensures we track elapsed time accurately even when processing commands,
+            // matching the refresh monitor's behavior. Only pause during self-refresh
+            // and power-down modes (when CKE is low and refresh isn't needed).
+            if (ready_init_i && !selfref_active && !pdown_active_o)
+                refCnt <= (refCnt > 12'd0) ? refCnt - 12'd1 : 12'd0;
             // Reset refresh counter when we issue the single-cycle AUTO REFRESH.
             // We check cnt==1 (first cycle in RREF) so we don't hold REF for two
             // cycles; the global cnt decrement runs after the case, so cnt==0
@@ -800,7 +797,12 @@ module ddr2_protocol_engine #(
                     casbar_o <= 1'b1;
                     webar_o  <= 1'b0;
                     a_o      <= PRE_ALL_A;
-                    if (cnt == 6'd0) begin
+                    // Allow exit request to abort entry sequence.
+                    if (selfref_exit_i) begin
+                        selfref_active <= 1'b0;
+                        refCnt <= REF_CNT_INIT_CFG[11:0];  // Reset refresh counter
+                        state <= IDLE;
+                    end else if (cnt == 6'd0) begin
                         state <= SREF_TRP;
                         cnt   <= CNT_RNOP;  // conservative tRP-equivalent window
                     end
@@ -813,7 +815,12 @@ module ddr2_protocol_engine #(
                     rasbar_o <= 1'b1;
                     casbar_o <= 1'b1;
                     webar_o  <= 1'b1;
-                    if (cnt == 6'd0) begin
+                    // Allow exit request to abort entry sequence.
+                    if (selfref_exit_i) begin
+                        selfref_active <= 1'b0;
+                        refCnt <= REF_CNT_INIT_CFG[11:0];  // Reset refresh counter
+                        state <= IDLE;
+                    end else if (cnt == 6'd0) begin
                         state <= SREF_ENTER;
                         cnt   <= 6'd1;
                     end
@@ -824,13 +831,20 @@ module ddr2_protocol_engine #(
                     // the command bus is held at NOP. The PHY maps
                     // selfref_active to CKE=0, so raising the flag here causes
                     // the transition on the pins.
-                    selfref_active <= 1'b1;
                     csbar_o <= 1'b0;
                     rasbar_o <= 1'b1;
                     casbar_o <= 1'b1;
                     webar_o  <= 1'b1;
-                    if (cnt == 6'd0) begin
-                        state <= SREF_IDLE;
+                    // Allow exit request to abort entry sequence.
+                    if (selfref_exit_i) begin
+                        selfref_active <= 1'b0;
+                        refCnt <= REF_CNT_INIT_CFG[11:0];  // Reset refresh counter
+                        state <= IDLE;
+                    end else begin
+                        selfref_active <= 1'b1;
+                        if (cnt == 6'd0) begin
+                            state <= SREF_IDLE;
+                        end
                     end
                 end
 
@@ -861,8 +875,17 @@ module ddr2_protocol_engine #(
                     rasbar_o <= 1'b1;
                     casbar_o <= 1'b1;
                     webar_o  <= 1'b1;
-                    if (cnt == 7'd0)
+                    if (cnt == 7'd0) begin
+                        // Treat self-refresh exit as a new refresh boundary: force the
+                        // internal refresh counter to an "urgent" value so that the next
+                        // AUTO REFRESH is scheduled promptly after exiting low-power.
+                        // This keeps the externally observed refresh interval (excluding
+                        // time spent in self-refresh) within the STRICT_JEDEC bound.
+                        refCnt <= 12'd0;
+                        $display("[%0t] PROT: SREF_EXIT_WAIT complete, transitioning to IDLE (selfref_active=%b, pdown_active_o=%b, need_refresh=%b, emptyBar_cmdFIFO_i=%b)",
+                                 $time, selfref_active, pdown_active_o, need_refresh, emptyBar_cmdFIFO_i);
                         state <= IDLE;
+                    end
                 end
 
                 // -----------------------------------------------------------------
@@ -876,7 +899,12 @@ module ddr2_protocol_engine #(
                     casbar_o <= 1'b1;
                     webar_o  <= 1'b0;
                     a_o      <= PRE_ALL_A;
-                    if (cnt == 6'd0) begin
+                    // Allow exit request to abort entry sequence.
+                    if (pdown_exit_i) begin
+                        pdown_active_o <= 1'b0;
+                        refCnt <= REF_CNT_INIT_CFG[11:0];  // Reset refresh counter
+                        state <= IDLE;
+                    end else if (cnt == 6'd0) begin
                         state <= PD_TRP;
                         cnt   <= CNT_RNOP;  // conservative tRP-equivalent window
                     end
@@ -889,7 +917,12 @@ module ddr2_protocol_engine #(
                     rasbar_o <= 1'b1;
                     casbar_o <= 1'b1;
                     webar_o  <= 1'b1;
-                    if (cnt == 6'd0) begin
+                    // Allow exit request to abort entry sequence.
+                    if (pdown_exit_i) begin
+                        pdown_active_o <= 1'b0;
+                        refCnt <= REF_CNT_INIT_CFG[11:0];  // Reset refresh counter
+                        state <= IDLE;
+                    end else if (cnt == 6'd0) begin
                         // Enter power-down: CKE low (via pdown_active_o) with
                         // NOPs on the bus.
                         pdown_active_o <= 1'b1;
@@ -921,8 +954,17 @@ module ddr2_protocol_engine #(
                     rasbar_o <= 1'b1;
                     casbar_o <= 1'b1;
                     webar_o  <= 1'b1;
-                    if (cnt == 7'd0)
+                    if (cnt == 7'd0) begin
+                        // Treat power-down exit as a new refresh boundary: force the
+                        // internal refresh counter to an "urgent" value so that the next
+                        // AUTO REFRESH is scheduled promptly after exiting low-power.
+                        // This keeps the externally observed refresh interval (excluding
+                        // time spent in power-down) within the STRICT_JEDEC bound.
+                        refCnt <= 12'd0;
+                        $display("[%0t] PROT: PD_EXIT_WAIT complete, transitioning to IDLE (selfref_active=%b, pdown_active_o=%b, need_refresh=%b, emptyBar_cmdFIFO_i=%b)",
+                                 $time, selfref_active, pdown_active_o, need_refresh, emptyBar_cmdFIFO_i);
                         state <= IDLE;
+                    end
                 end
 
                 // -----------------------------------------------------------------

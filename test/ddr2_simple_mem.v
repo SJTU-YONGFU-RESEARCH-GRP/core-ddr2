@@ -220,11 +220,17 @@ module ddr2_simple_mem #(
             dqs_drive  <= 2'b00;
         end else if (rd_pending) begin
             if (!rd_drive) begin
-                // Count down latency before driving.
-                if (rd_lat_cnt != 8'd0) begin
+                // Count down latency before driving. Drive first word when
+                // rd_lat_cnt==2 so it is stable at READ_LAT-1 when the
+                // controller captures (avoids posedge race with CNT_SCREAD=23).
+                if (rd_lat_cnt == 8'd2) begin
+                    idx = make_word_addr(rd_row, rd_bank, rd_col);
+                    rd_data_reg <= mem[rd_rank][idx % MEM_DEPTH];
+                    rd_drive    <= 1'b1;
+                    rd_beat     <= 3'd1;
+                    dqs_drive   <= 2'b01;
+                end else if (rd_lat_cnt != 8'd0) begin
                     rd_lat_cnt <= rd_lat_cnt - 8'd1;
-                end else begin
-                    rd_drive <= 1'b1;
                 end
             end else begin
                 // Drive one word per clk for 8 beats.
